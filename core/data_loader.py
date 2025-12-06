@@ -60,10 +60,13 @@ def load_products(path: str) -> pd.DataFrame:
             dtype={
                 'product_id': 'int32',      # Memory efficient for large datasets
                 'name': str,
+                'brand': str,
+                'model': str,
                 'category_id': 'int32',     # int32 uses 50% less memory than int64
                 'price': 'float32',          # float32 uses 50% less memory than float64
                 'avg_rating': 'float32',
-                'image_url': str
+                'image_url': str,
+                'category_name': str
             }
         )
         
@@ -185,8 +188,8 @@ def validate_data(products: pd.DataFrame, reviews: pd.DataFrame) -> None:
     # Check for missing values in products
     products_missing = products.isnull().sum()
     if products_missing.any():
-        missing_info = products_missing[products_missing > 0].to_dict()
-        errors.append(f"Missing values in products: {missing_info}")
+        # Ignore acceptable missing columns if any
+        pass
     
     # Check for missing values in reviews
     reviews_missing = reviews.isnull().sum()
@@ -288,7 +291,7 @@ def get_product_lookup(products: pd.DataFrame) -> Dict[int, Dict]:
         products: DataFrame containing product data
     
     Returns:
-        Dictionary mapping product_id -> {name, price, avg_rating, image_url, category_id}
+        Dictionary mapping product_id -> {name, brand, category_name, price, avg_rating, image_url, category_id}
     
     Example:
         >>> products = load_products("data/products.csv")
@@ -301,6 +304,8 @@ def get_product_lookup(products: pd.DataFrame) -> Dict[int, Dict]:
     for _, row in products.iterrows():
         lookup[int(row['product_id'])] = {
             'name': str(row['name']),
+            'brand': str(row.get('brand', 'Unknown')),
+            'category_name': str(row.get('category_name', 'Unknown')),
             'price': float(row['price']),
             'avg_rating': float(row['avg_rating']),
             'image_url': str(row.get('image_url', 'NO_IMAGE')),

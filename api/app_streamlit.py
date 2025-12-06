@@ -40,76 +40,42 @@ st.set_page_config(
 def search_products(
     products_df: pd.DataFrame,
     query: str,
-    max_results: int = 20
+    max_results: int = 60
 ) -> pd.DataFrame:
     """
     Search products by name (optimized for 50K+ rows).
     
-    Uses vectorized string operations for efficiency. Case-insensitive search
-    on product names, sorted by match position (earlier matches first).
-    
-    Args:
-        products_df: DataFrame with product data
-        query: Search query string
-        max_results: Maximum number of results to return
-    
-    Returns:
-        Filtered DataFrame with up to max_results products
-    
-    Example:
-        >>> results = search_products(products, "wireless", max_results=10)
+    Uses vectorized string operations. Case-insensitive search on name.
+    Returns up to max_results matches.
     """
     if not query or query.strip() == "":
-        return pd.DataFrame()  # Empty result for empty query
+        return pd.DataFrame()
     
-    query_lower = query.lower().strip()
+    query = query.strip()
     
-    # Vectorized case-insensitive search
-    matches = products_df['name'].str.lower().str.contains(query_lower, na=False)
-    filtered = products_df[matches].copy()
+    # Vectorized case-insensitive search on name only
+    mask = products_df['name'].str.contains(query, case=False, na=False)
+    filtered = products_df[mask].head(max_results).copy()
     
-    if filtered.empty:
-        return filtered
-    
-    # Sort by match position (earlier matches ranked higher)
-    filtered['_match_pos'] = filtered['name'].str.lower().apply(
-        lambda x: x.find(query_lower)
-    )
-    filtered = filtered.sort_values('_match_pos')
-    filtered = filtered.drop(columns=['_match_pos'])
-    
-    # Return top results
-    return filtered.head(max_results)
+    return filtered
 
 
 def get_product_details(products_df: pd.DataFrame, product_id: int) -> dict:
     """
     Get detailed information for a specific product.
-    
-    Args:
-        products_df: DataFrame with product data
-        product_id: Product ID to look up
-    
-    Returns:
-        Dictionary with product details: product_id, name, price, avg_rating, category_id, image_url
-    
-    Raises:
-        KeyError: If product_id not found
-    
-    Example:
-        >>> details = get_product_details(products, 42)
-        >>> print(f"{details['name']}: ${details['price']:.2f}")
     """
     product_row = products_df[products_df['product_id'] == product_id]
     
     if product_row.empty:
-        raise KeyError(f"Product ID {product_id} not found in products DataFrame")
+        raise KeyError(f"Product ID {product_id} not found")
     
     row = product_row.iloc[0]
     
     return {
         'product_id': int(row['product_id']),
         'name': str(row['name']),
+        'brand': str(row.get('brand', 'Unknown')),
+        'category_name': str(row.get('category_name', 'Unknown')),
         'price': float(row['price']),
         'avg_rating': float(row['avg_rating']),
         'category_id': int(row['category_id']),
@@ -118,13 +84,7 @@ def get_product_details(products_df: pd.DataFrame, product_id: int) -> dict:
 
 
 def display_product_image(image_url: str, width: int = 150):
-    """
-    Display product image or placeholder.
-    
-    Args:
-        image_url: URL or path to image
-        width: Display width in pixels
-    """
+    """Display product image or placeholder."""
     if image_url and image_url != "NO_IMAGE":
         try:
             st.image(image_url, width=width)
@@ -137,15 +97,7 @@ def display_product_image(image_url: str, width: int = 150):
 # ========== Initialize Components (Cached) ==========
 @st.cache_data
 def get_data():
-    """
-    Load product and review data (cached for performance).
-    
-    Uses @st.cache_data so that CSV loading happens only once,
-    even with 50K+ products. Subsequent interactions reuse cached data.
-    
-    Returns:
-        Tuple of (products_df, reviews_df)
-    """
+    """Load product and review data (cached)."""
     data_dir = current_dir.parent / "data"
     products = load_products(str(data_dir / "products.csv"))
     reviews = load_reviews(str(data_dir / "reviews.csv"))
@@ -155,32 +107,15 @@ def get_data():
 
 @st.cache_resource
 def get_models(products_df: pd.DataFrame, reviews_df: pd.DataFrame):
-    """
-    Initialize recommenders and comparator (cached as resources).
-    
-    Uses @st.cache_resource for expensive operations:
-    - DeviceManager initialization
-    - Feature matrix building (float32 operations)
-    - Model fitting (storing 50K+ product vectors)
-    
-    These are resource-heavy and should only happen once per session.
-    
-    Args:
-        products_df: Products DataFrame
-        reviews_df: Reviews DataFrame
-    
-    Returns:
-        Dictionary with dm, product_ids, recommender_cpu, recommender_gpu, comparator
-    """
-    # Device manager
+    """Initialize recommenders and comparator (cached)."""
     dm = DeviceManager()
     
-    # Build features (expensive for 50K+ products)
+    # Build features
     fb = FeatureBuilder(dm)
     features = fb.build_product_matrix(products_df)
     product_ids = fb.get_product_ids(products_df)
     
-    # Create recommenders (stores feature matrices)
+    # Create recommenders
     recommender_cpu = ParallelRecommender(dm)
     recommender_cpu.fit(features, product_ids)
     
@@ -201,10 +136,8 @@ def get_models(products_df: pd.DataFrame, reviews_df: pd.DataFrame):
     }
 
 
-# Load data (cached)
+# Load data and models
 products, reviews = get_data()
-
-# Initialize models (cached)
 models = get_models(products, reviews)
 dm = models['dm']
 product_ids = models['product_ids']
@@ -218,49 +151,22 @@ with st.sidebar:
     st.title("🛍️ PaReCo-Py")
     st.markdown("**Parallel Recommendation & Comparison Engine**")
     st.caption("Optimized for 50,000+ products")
-    
     st.divider()
-    
-    st.subheader("⚙️ System Information")
     
     # Device info
     if dm.use_gpu:
         st.success(f"**Device:** GPU ({dm.device})")
-        st.info("✓ CUDA acceleration enabled")
     else:
         st.info(f"**Device:** CPU only")
-        st.caption("💡 Install PyTorch with CUDA for GPU acceleration")
     
     st.divider()
-    
-    # Data statistics
     st.subheader("📊 Dataset")
     st.metric("Products", len(products))
     st.metric("Reviews", len(reviews))
-    st.metric("Categories", products['category_id'].nunique())
-    
-    st.divider()
-    
-    # About
-    st.caption("**About PaReCo-Py**")
-    st.caption("• Search-based selection for 50K+ products")
-    st.caption("• Product image display")
-    st.caption("• Data Parallelism (CPU)")
-    st.caption("• Task Parallelism (CPU)")
-    if dm.use_gpu:
-        st.caption("• GPU Parallelism (PyTorch)")
 
 
 # ========== Main Content ==========
 st.title("🛍️ PaReCo-Py Dashboard")
-st.markdown("Search-based product discovery for large catalogs (50K+ products)")
-
-# Optimization info
-st.info(
-    "🚀 **Optimized for Large Datasets**: This application uses Streamlit caching "
-    "and parallel processing to efficiently handle 50,000+ products. Data loading "
-    "and model initialization happen only once per session, ensuring fast interactions."
-)
 
 # Create tabs
 tab1, tab2 = st.tabs(["🎯 Recommendations", "⚖️ Product Comparison"])
@@ -268,197 +174,166 @@ tab1, tab2 = st.tabs(["🎯 Recommendations", "⚖️ Product Comparison"])
 
 # ========== Tab 1: Recommendations ==========
 with tab1:
-    st.header("Product Recommendations")
-    st.markdown("Search for a product, view details, and get personalized recommendations")
-    
-    # Initialize session state for recommendations  
-    if 'recommendations' not in st.session_state:
-        st.session_state.recommendations = None
-    if 'rec_limit' not in st.session_state:
-        st.session_state.rec_limit = 6
+    # Initialize session state
     if 'selected_product_id' not in st.session_state:
         st.session_state.selected_product_id = None
-    
-    # Search interface
-    search_query = st.text_input(
-        "🔍 Search for a product by name:",
-        placeholder="e.g., wireless, headphones, keyboard..."
-    )
-    
-    selected_product_id = None
-    
-    if search_query:
-        # Search products (up to 30 results)
-        search_results = search_products(products, search_query, max_results=30)
+    if 'current_recs' not in st.session_state:
+        st.session_state.current_recs = []
+    if 'rec_limit' not in st.session_state:
+        st.session_state.rec_limit = 6
+    if 'rec_time' not in st.session_state:
+        st.session_state.rec_time = 0.0
+    if 'rec_mode' not in st.session_state:
+        st.session_state.rec_mode = ""
+
+    # --- View 1: Search & Grid ---
+    if st.session_state.selected_product_id is None:
+        st.header("Search Products")
         
-        if not search_results.empty:
-            st.success(f"Found {len(search_results)} matching products (showing top 30)")
+        search_query = st.text_input(
+            "🔍 Search for a product:",
+            placeholder="e.g., television, smartphone, headphones...",
+            key="main_search"
+        )
+        
+        if search_query:
+            results = search_products(products, search_query)
             
-            # Product selection from search results with radio buttons
-            product_options = [
-                f"{row['product_id']} – {row['name']}"
-                for _, row in search_results.iterrows()
-            ]
-            
-            selected_option = st.radio(
-                "Select a product:",
-                options=product_options,
-                index=0,
-                key="product_selector"
-            )
-            
-            # Extract product ID from selection
-            selected_product_id = int(selected_option.split(" – ")[0])
-            
-            # If product changed, reset recommendations
-            if selected_product_id != st.session_state.selected_product_id:
-                st.session_state.selected_product_id = selected_product_id
-                st.session_state.recommendations = None
-                st.session_state.rec_limit = 6
-            
+            if not results.empty:
+                st.success(f"Found {len(results)} matching products")
+                
+                # Grid Layout for Results
+                cols_per_row = 3
+                rows = [results.iloc[i:i + cols_per_row] for i in range(0, len(results), cols_per_row)]
+                
+                for row in rows:
+                    cols = st.columns(cols_per_row)
+                    for idx, (_, product) in enumerate(row.iterrows()):
+                        with cols[idx]:
+                            # Card Container
+                            with st.container(border=True):
+                                display_product_image(product.get("image_url"), width=150)
+                                st.markdown(f"**{product['name']}**")
+                                st.caption(f"{product['avg_rating']} ⭐ | ₹{product['price']:,.2f}")
+                                
+                                if st.button("View Details", key=f"view_{product['product_id']}"):
+                                    st.session_state.selected_product_id = int(product['product_id'])
+                                    st.session_state.rec_limit = 6
+                                    st.session_state.current_recs = [] # Clear old recs
+                                    st.rerun()
+            else:
+                st.warning("No products found matching your query.")
         else:
-            st.warning("❌ No products found. Try a different search term.")
+            st.info("Start typing to search for products.")
+
+    # --- View 2: Product Details & Recommendations ---
     else:
-        st.info("👆 Start typing to search for products")
-    
-    # ========== Product Details Section ==========
-    if selected_product_id:
-        st.divider()
-        st.subheader("📦 Product Details")
+        pid = st.session_state.selected_product_id
         
-        # Get product details
-        target_product = get_product_details(products, selected_product_id)
-        
-        # Layout: Image left, Details right
-        col_img, col_details = st.columns([1, 2])
-        
-        with col_img:
-            display_product_image(target_product['image_url'], width=200)
-        
-        with col_details:
-            st.markdown(f"### {target_product['name']}")
+        # Back Button
+        if st.button("🔙 Back to Search"):
+            st.session_state.selected_product_id = None
+            st.rerun()
+
+        try:
+            details = get_product_details(products, pid)
             
-            # Product metrics
-            metric_col1, metric_col2, metric_col3 = st.columns(3)
-            metric_col1.metric("Price", f"${target_product['price']:.2f}")
-            metric_col2.metric("Avg Rating", f"{target_product['avg_rating']:.1f}⭐")
-            metric_col3.metric("Category ID", target_product['category_id'])
+            # --- Product Header ---
+            st.divider()
+            col_img, col_info = st.columns([1, 2])
             
-            # Auto-generate description if missing
-            category_names = {
-                1: "Electronics", 2: "Accessories", 3: "Computing", 
-                4: "Audio", 5: "Peripherals", 6: "Cables & Adapters"
-            }
-            category_id = target_product['category_id']
-            category_name = category_names.get(category_id, "Products")
+            with col_img:
+                display_product_image(details['image_url'], width=300)
             
-            # Description (auto-generated)
-            st.markdown("**Description:**")
-            description = (
-                f"This {target_product['name']} is a high-quality product in our {category_name} category. "
-                f"Priced at ${target_product['price']:.2f}, it has earned an average rating of "
-                f"{target_product['avg_rating']:.1f} stars from our customers. "
-                f"Perfect for anyone looking for reliable {category_name.lower()}."
-            )
-            st.write(description)
-        
-        # ========== Reviews Section ==========
-        st.markdown("---")
-        st.markdown("### 📝 Recent Reviews")
-        
-        # Filter reviews for this product
-        product_reviews = reviews[reviews['product_id'] == selected_product_id].head(20)
-        
-        if not product_reviews.empty:
-            # Display reviews in a clean format
-            for idx, review_row in product_reviews.iterrows():
-                review_col1, review_col2 = st.columns([1, 5])
+            with col_info:
+                st.title(details['name'])
+                st.markdown(f"**Brand:** {details['brand']} | **Category:** {details['category_name']}")
+                st.subheader(f"₹{details['price']:,.2f}")
+                st.markdown(f"**Rating:** {details['avg_rating']} ⭐")
                 
-                with review_col1:
-                    st.metric("Rating", f"{review_row['rating']:.1f}⭐", label_visibility="collapsed")
-                
-                with review_col2:
-                    st.markdown(f"*{review_row['review_text']}*")
-                
-                if idx < product_reviews.index[-1]:
-                    st.markdown("---")
-        else:
-            st.info("📭 No reviews available for this product yet.")
-        
-        # ========== Auto-Generated Recommendations ==========
-        st.divider()
-        st.subheader("🎯 Recommended Products")
-        
-        # Auto-compute recommendations if not already done
-        if st.session_state.recommendations is None:
-            target_index = products[products['product_id'] == selected_product_id].index[0]
+                # Auto-generated description
+                desc = (
+                    f"Experience the new {details['name']} by {details['brand']}. "
+                    f"Top-rated in {details['category_name']} with a {details['avg_rating']} star rating. "
+                    "Available now at the best price."
+                )
+                st.info(desc)
             
-            with st.spinner("Computing personalized recommendations..."):
-                # Always compute top 20 recommendations
-                if dm.use_gpu and recommender_gpu:
-                    recs, elapsed = time_function(
-                        recommender_gpu.recommend_similar_gpu,
-                        target_index,
-                        top_k=20
-                    )
-                    mode_label = "GPU"
-                else:
-                    recs, elapsed = time_function(
-                        recommender_cpu.recommend_similar,
-                        target_index,
-                        top_k=20,
-                        n_workers=4
-                    )
-                    mode_label = "CPU (4 workers)"
-                
-                st.session_state.recommendations = recs
-                st.session_state.computation_time = elapsed
-                st.session_state.computation_mode = mode_label
-        
-        # Display recommendations (progressive reveal)
-        if st.session_state.recommendations:
-            recs = st.session_state.recommendations
-            rec_limit = st.session_state.rec_limit
+            # --- Reviews ---
+            st.markdown("### 📝 Recent Reviews")
+            prod_reviews = reviews[reviews['product_id'] == pid].head(20)
             
-            st.info(f"✨ Showing {min(rec_limit, len(recs))} of {len(recs)} recommendations "
-                   f"(computed in {format_time(st.session_state.computation_time)} "
-                   f"using {st.session_state.computation_mode})")
+            if not prod_reviews.empty:
+                with st.expander(f"View {len(prod_reviews)} Reviews", expanded=False):
+                    for _, r in prod_reviews.iterrows():
+                        st.markdown(f"**{r['rating']}⭐** - {r['review_text']}")
+                        st.divider()
+            else:
+                st.caption("No reviews available for this product yet.")
             
-            # Display recommendations up to rec_limit
-            for i, rec in enumerate(recs[:rec_limit], 1):
-                prod_details = get_product_details(products, rec['product_id'])
-                
-                # Card-like layout with columns
-                card_col1, card_col2 = st.columns([1, 3])
-                
-                with card_col1:
-                    display_product_image(prod_details['image_url'], width=120)
-                
-                with card_col2:
-                    st.markdown(f"#### {i}. {prod_details['name']}")
+            # --- Recommendations Logic ---
+            if not st.session_state.current_recs:
+                with st.spinner("Computing recommendations..."):
+                    target_idx = products[products['product_id'] == pid].index[0]
                     
-                    detail_col1, detail_col2, detail_col3 = st.columns(3)
-                    detail_col1.metric("Price", f"${prod_details['price']:.2f}")
-                    detail_col2.metric("Rating", f"{prod_details['avg_rating']:.1f}⭐")
-                    detail_col3.metric("Similarity", f"{rec['score']:.4f}")
-                
-                if i < min(rec_limit, len(recs)):
-                    st.markdown("---")
+                    # Use GPU if available/preferred, else CPU
+                    if dm.use_gpu and recommender_gpu:
+                         recs, elapsed = time_function(
+                            recommender_gpu.recommend_similar_gpu,
+                            target_idx, top_k=20
+                        )
+                         mode = "GPU"
+                    else:
+                        recs, elapsed = time_function(
+                            recommender_cpu.recommend_similar,
+                            target_idx, top_k=20, n_workers=4
+                        )
+                        mode = "CPU"
+                    
+                    st.session_state.current_recs = recs
+                    st.session_state.rec_time = elapsed
+                    st.session_state.rec_mode = mode
             
-            # "Load More" button
-            if rec_limit < len(recs):
-                if st.button("📥 Load More Recommendations", type="secondary"):
-                    st.session_state.rec_limit = min(rec_limit + 6, 20)
+            # --- Display Recommendations ---
+            st.divider()
+            st.subheader("🎯 Recommended Products")
+            st.caption(f"Computed in {format_time(st.session_state.rec_time)} using {st.session_state.rec_mode}")
+            
+            current_recs = st.session_state.current_recs
+            limit = st.session_state.rec_limit
+            visible_recs = current_recs[:limit]
+            
+            # Grid display for recs
+            r_rows = [visible_recs[i:i + 3] for i in range(0, len(visible_recs), 3)]
+            
+            for row in r_rows:
+                r_cols = st.columns(3)
+                for idx, r_item in enumerate(row):
+                    r_detail = get_product_details(products, r_item['product_id'])
+                    with r_cols[idx]:
+                         with st.container(border=True):
+                            display_product_image(r_detail['image_url'], width=100)
+                            st.markdown(f"**{r_detail['name']}**")
+                            st.caption(f"₹{r_detail['price']:,.2f} | {r_detail['avg_rating']}⭐")
+                            st.caption(f"Similarity: {r_item['score']:.4f}")
+                            
+                            # Click to switch product
+                            if st.button("View", key=f"rec_{r_detail['product_id']}"):
+                                st.session_state.selected_product_id = int(r_detail['product_id'])
+                                st.session_state.rec_limit = 6
+                                st.session_state.current_recs = []
+                                st.rerun()
+
+            # --- "Recommend More" Button ---
+            if limit < 20 and limit < len(current_recs):
+                if st.button("⬇️ Recommend More"):
+                    st.session_state.rec_limit = min(limit + 6, 20)
                     st.rerun()
-            elif rec_limit < 20 and len(recs) == rec_limit:
-                st.caption("✓ All recommendations loaded")
-            
-            # Performance metrics
-            with st.expander("📊 Performance Metrics"):
-                perf_col1, perf_col2, perf_col3 = st.columns(3)
-                perf_col1.metric("Computation Time", format_time(st.session_state.computation_time))
-                perf_col2.metric("Mode", st.session_state.computation_mode)
-                perf_col3.metric("Products Analyzed", len(products))
+            elif limit >= 20:
+                st.caption("✨ Max recommendations shown.")
+
+        except KeyError:
+            st.error("Product details not found.")
 
 
 # ========== Tab 2: Comparison ==========
