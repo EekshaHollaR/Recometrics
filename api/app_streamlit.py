@@ -168,24 +168,46 @@ with st.sidebar:
 # ========== Main Content ==========
 st.title("🛍️ PaReCo-Py Dashboard")
 
+# Initialize Session State (Global)
+if 'selected_product_id' not in st.session_state:
+    st.session_state.selected_product_id = None
+if 'current_recs' not in st.session_state:
+    st.session_state.current_recs = []
+if 'rec_limit' not in st.session_state:
+    st.session_state.rec_limit = 6
+if 'rec_time' not in st.session_state:
+    st.session_state.rec_time = 0.0
+if 'rec_mode' not in st.session_state:
+    st.session_state.rec_mode = ""
+if 'compare_products' not in st.session_state:
+    st.session_state.compare_products = []
+if 'recommendations' not in st.session_state:
+    st.session_state.recommendations = None
+
+
+# --- Helpers ---
+def add_to_compare(product_id: int):
+    """Add product to comparison list."""
+    if product_id not in st.session_state.compare_products:
+        st.session_state.compare_products.append(product_id)
+        st.toast(f"Added product {product_id} to comparison", icon="✅")
+    else:
+        st.toast("Product already in comparison list", icon="ℹ️")
+
+def remove_from_compare(product_id: int):
+    """Remove product from comparison list."""
+    if product_id in st.session_state.compare_products:
+        st.session_state.compare_products.remove(product_id)
+        st.toast(f"Removed product {product_id}", icon="🗑️")
+        st.rerun()
+
+
 # Create tabs
 tab1, tab2 = st.tabs(["🎯 Recommendations", "⚖️ Product Comparison"])
 
 
 # ========== Tab 1: Recommendations ==========
 with tab1:
-    # Initialize session state
-    if 'selected_product_id' not in st.session_state:
-        st.session_state.selected_product_id = None
-    if 'current_recs' not in st.session_state:
-        st.session_state.current_recs = []
-    if 'rec_limit' not in st.session_state:
-        st.session_state.rec_limit = 6
-    if 'rec_time' not in st.session_state:
-        st.session_state.rec_time = 0.0
-    if 'rec_mode' not in st.session_state:
-        st.session_state.rec_mode = ""
-
     # --- View 1: Search & Grid ---
     if st.session_state.selected_product_id is None:
         st.header("Search Products")
@@ -209,18 +231,22 @@ with tab1:
                 for row in rows:
                     cols = st.columns(cols_per_row)
                     for idx, (_, product) in enumerate(row.iterrows()):
+                        pid = int(product['product_id'])
                         with cols[idx]:
-                            # Card Container
                             with st.container(border=True):
                                 display_product_image(product.get("image_url"), width=150)
                                 st.markdown(f"**{product['name']}**")
                                 st.caption(f"{product['avg_rating']} ⭐ | ₹{product['price']:,.2f}")
                                 
-                                if st.button("View Details", key=f"view_{product['product_id']}"):
-                                    st.session_state.selected_product_id = int(product['product_id'])
+                                c1, c2 = st.columns(2)
+                                if c1.button("View Details", key=f"view_{pid}"):
+                                    st.session_state.selected_product_id = pid
                                     st.session_state.rec_limit = 6
-                                    st.session_state.current_recs = [] # Clear old recs
+                                    st.session_state.current_recs = [] 
                                     st.rerun()
+                                
+                                if c2.button("Add Compare", key=f"comp_{pid}"):
+                                    add_to_compare(pid)
             else:
                 st.warning("No products found matching your query.")
         else:
@@ -230,11 +256,12 @@ with tab1:
     else:
         pid = st.session_state.selected_product_id
         
-        # Back Button
-        if st.button("🔙 Back to Search"):
+        # Navigation
+        c1, c2 = st.columns([1, 5])
+        if c1.button("🔙 Back to Search"):
             st.session_state.selected_product_id = None
             st.rerun()
-
+            
         try:
             details = get_product_details(products, pid)
             
@@ -250,6 +277,9 @@ with tab1:
                 st.markdown(f"**Brand:** {details['brand']} | **Category:** {details['category_name']}")
                 st.subheader(f"₹{details['price']:,.2f}")
                 st.markdown(f"**Rating:** {details['avg_rating']} ⭐")
+                
+                if st.button("Add to Compare", key=f"btn_add_compare_{pid}"):
+                    add_to_compare(pid)
                 
                 # Auto-generated description
                 desc = (
@@ -276,7 +306,6 @@ with tab1:
                 with st.spinner("Computing recommendations..."):
                     target_idx = products[products['product_id'] == pid].index[0]
                     
-                    # Use GPU if available/preferred, else CPU
                     if dm.use_gpu and recommender_gpu:
                          recs, elapsed = time_function(
                             recommender_gpu.recommend_similar_gpu,
@@ -309,7 +338,8 @@ with tab1:
             for row in r_rows:
                 r_cols = st.columns(3)
                 for idx, r_item in enumerate(row):
-                    r_detail = get_product_details(products, r_item['product_id'])
+                    r_pid = int(r_item['product_id'])
+                    r_detail = get_product_details(products, r_pid)
                     with r_cols[idx]:
                          with st.container(border=True):
                             display_product_image(r_detail['image_url'], width=100)
@@ -317,12 +347,15 @@ with tab1:
                             st.caption(f"₹{r_detail['price']:,.2f} | {r_detail['avg_rating']}⭐")
                             st.caption(f"Similarity: {r_item['score']:.4f}")
                             
-                            # Click to switch product
-                            if st.button("View", key=f"rec_{r_detail['product_id']}"):
-                                st.session_state.selected_product_id = int(r_detail['product_id'])
+                            b1, b2 = st.columns(2)
+                            if b1.button("View", key=f"rec_view_{r_pid}"):
+                                st.session_state.selected_product_id = r_pid
                                 st.session_state.rec_limit = 6
                                 st.session_state.current_recs = []
                                 st.rerun()
+                            
+                            if b2.button("Compare", key=f"rec_comp_{r_pid}"):
+                                add_to_compare(r_pid)
 
             # --- "Recommend More" Button ---
             if limit < 20 and limit < len(current_recs):
@@ -338,149 +371,105 @@ with tab1:
 
 # ========== Tab 2: Comparison ==========
 with tab2:
-    st.header("Product Comparison")
-    st.markdown("Search and compare multiple products side-by-side")
+    st.header("⚖️ Product Comparison")
     
-    # Search interface
-    comp_search_query = st.text_input(
-        "🔍 Search for products to compare:",
-        placeholder="e.g., mouse, cable, charger...",
-        key="comp_search"
-    )
+    compare_ids = st.session_state.compare_products
     
-    selected_for_comparison = []
-    
-    if comp_search_query:
-        # Search products
-        comp_search_results = search_products(products, comp_search_query, max_results=20)
+    # 1. Selected Products
+    if compare_ids:
+        st.subheader(f"Selected ({len(compare_ids)})")
+        # Grid layout for selected products removal
+        sel_rows = [compare_ids[i:i + 4] for i in range(0, len(compare_ids), 4)]
         
-        if not comp_search_results.empty:
-            st.success(f"Found {len(comp_search_results)} matching products")
-            
-            # Display search results
-            display_comp_results = comp_search_results[['product_id', 'name', 'price', 'avg_rating']].copy()
-            display_comp_results['price'] = display_comp_results['price'].apply(lambda x: f"${x:.2f}")
-            display_comp_results['avg_rating'] = display_comp_results['avg_rating'].apply(lambda x: f"{x:.1f}⭐")
-            
-            st.dataframe(
-                display_comp_results,
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            # Multi-select from search results
-            comp_options = [
-                f"{row['product_id']} – {row['name']}"
-                for _, row in comp_search_results.iterrows()
-            ]
-            
-            selected_comp_options = st.multiselect(
-                "Select 2-6 products to compare:",
-                options=comp_options,
-                default=comp_options[:min(3, len(comp_options))]
-            )
-            
-            # Extract product IDs
-            selected_for_comparison = [
-                int(opt.split(" – ")[0]) for opt in selected_comp_options
-            ]
-            
-        else:
-            st.warning("❌ No products found. Try a different search term.")
-    else:
-        st.info("👆 Start typing to search for products to compare")
-    
-    # Workers slider
-    n_workers = st.slider(
-        "Number of workers:",
-        min_value=1,
-        max_value=8,
-        value=4
-    )
-    
-    # Validation
-    if selected_for_comparison and (len(selected_for_comparison) < 2 or len(selected_for_comparison) > 6):
-        st.warning("⚠️ Please select between 2 and 6 products for comparison")
-    
-    # Compare button
-    if st.button(
-        "⚖️ Compare Products",
-        type="primary",
-        disabled=(len(selected_for_comparison) < 2 or len(selected_for_comparison) > 6)
-    ):
-        # Display selected products with images
-        st.subheader("Selected Products")
-        cols = st.columns(min(len(selected_for_comparison), 3))
-        
-        for idx, pid in enumerate(selected_for_comparison):
-            prod_details = get_product_details(products, pid)
-            col_idx = idx % 3
-            
-            with cols[col_idx]:
-                display_product_image(prod_details['image_url'], width=120)
-                st.markdown(f"**{prod_details['name']}**")
-                st.caption(f"${prod_details['price']:.2f} | {prod_details['avg_rating']:.1f}⭐")
-        
+        for r_ids in sel_rows:
+             r_cols = st.columns(4)
+             for idx, pid in enumerate(r_ids):
+                with r_cols[idx]:
+                    try:
+                        p_info = get_product_details(products, pid)
+                        with st.container(border=True):
+                            st.caption(f"**{p_info['name']}**")
+                            # display_product_image(p_info['image_url'], width=80) 
+                            if st.button("❌ Remove", key=f"rem_{pid}"):
+                                remove_from_compare(pid)
+                    except KeyError:
+                        st.error(f"ID {pid} not found")
         st.divider()
-        
-        # Perform comparison
-        with st.spinner(f"Analyzing {len(selected_for_comparison)} products with {n_workers} workers..."):
-            comparison_results, elapsed = time_function(
-                comparator.compare_products,
-                selected_for_comparison,
-                n_workers=n_workers
+    else:
+        st.info("No products selected. Add products from the Search tab search below.")
+
+    # 2. Add More Products
+    st.subheader("Add Products to Compare")
+    comp_search = st.text_input("Search (e.g. monitor, laptop) to add:", key="comp_search_bar")
+    
+    if comp_search:
+        results = search_products(products, comp_search, max_results=12)
+        if not results.empty:
+            rows = [results.iloc[i:i + 4] for i in range(0, len(results), 4)]
+            for row in rows:
+                cols = st.columns(4)
+                for idx, (_, p) in enumerate(row.iterrows()):
+                    pid = int(p['product_id'])
+                    with cols[idx]:
+                        with st.container(border=True):
+                            st.caption(f"**{p['name']}**")
+                            st.caption(f"₹{p['price']:,.0f}")
+                            
+                            if pid in compare_ids:
+                                st.button("✓ Added", disabled=True, key=f"added_{pid}")
+                            else:
+                                if st.button("Add", key=f"add_comp_search_{pid}"):
+                                    add_to_compare(pid)
+                                    st.rerun()
+
+    # 3. Compare Action
+    st.divider()
+    
+    if len(compare_ids) >= 2:
+        if st.button("🚀 Compare Now", type="primary"):
+            st.subheader("Comparison Results")
+            
+            comp_data = []
+            for pid in compare_ids:
+                d = get_product_details(products, pid)
+                comp_data.append(d)
+                
+            df_comp = pd.DataFrame(comp_data)
+            
+            # Metric Calculation
+            # Weighted Score: Rating (normalized) * 0.7 + (1/Price normalized) * 0.3 approx
+            # Simple heuristic: Rating * 10 - Price/1000
+            df_comp['score'] = (df_comp['avg_rating'] * 2000) - df_comp['price']
+            
+            best_overall = df_comp.loc[df_comp['score'].idxmax()]
+            best_perf = df_comp.loc[df_comp['avg_rating'].idxmax()]
+            
+            # Budget: min price among those with rating >= 4.0, else min price
+            budg_cand = df_comp[df_comp['avg_rating'] >= 4.0]
+            if budg_cand.empty:
+                 budg_cand = df_comp
+            best_budget = budg_cand.loc[budg_cand['price'].idxmin()]
+
+            # Badges
+            c1, c2, c3 = st.columns(3)
+            c1.success(f"🏆 Best Overall: **{best_overall['name']}**")
+            c2.info(f"💰 Best Budget: **{best_budget['name']}**")
+            c3.warning(f"⭐ Best Performance: **{best_perf['name']}**")
+            
+            # Table
+            st.dataframe(
+                df_comp[['name', 'brand', 'price', 'avg_rating', 'category_name']].style.format({
+                    'price': '₹{:.2f}',
+                    'avg_rating': '{:.1f}⭐'
+                }),
+                use_container_width=True
             )
-        
-        st.success(f"✓ Compared {len(comparison_results)} products in {format_time(elapsed)}")
-        
-        # Build comparison table
-        comparison_data = []
-        for i, prod in enumerate(comparison_results, 1):
-            comparison_data.append({
-                'Rank': i,
-                'Product Name': prod['name'],
-                'Price': f"${prod['price']:.2f}",
-                'Avg Rating': f"{prod['avg_rating']:.2f}⭐",
-                'Review Count': prod['review_count'],
-                'Positive Reviews': f"{prod['positive_ratio']*100:.1f}%"
-            })
-        
-        comparison_df = pd.DataFrame(comparison_data)
-        
-        st.subheader("Comparison Results (Sorted by Rating)")
-        st.dataframe(
-            comparison_df,
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        # Visual comparison
-        st.subheader("📊 Visual Comparison")
-        
-        chart_data = pd.DataFrame({
-            'Product': [p['name'][:20] + '...' if len(p['name']) > 20 else p['name'] 
-                       for p in comparison_results],
-            'Price ($)': [p['price'] for p in comparison_results],
-            'Rating': [p['avg_rating'] for p in comparison_results]
-        })
-        
-        col_chart1, col_chart2 = st.columns(2)
-        
-        with col_chart1:
-            st.bar_chart(chart_data.set_index('Product')['Price ($)'])
-        
-        with col_chart2:
-            st.bar_chart(chart_data.set_index('Product')['Rating'])
-        
-        # Performance metrics
-        with st.expander("📊 Performance Metrics"):
-            perf_col1, perf_col2, perf_col3 = st.columns(3)
-            perf_col1.metric("Comparison Time", format_time(elapsed))
-            perf_col2.metric("Workers", n_workers)
-            perf_col3.metric("Products Analyzed", len(comparison_results))
-
-
-# ========== Footer ==========
-st.divider()
-st.caption("PaReCo-Py - Parallel Recommendation & Comparison Engine | "
-          "Optimized for 50K+ products with search-based selection and image display")
+            
+            # Workers slider hidden/fixed for simplicity or shown if needed
+            
+    elif len(compare_ids) == 1:
+        st.warning("Select at least one more product to compare.")
+    
+    # 4. Footer
+    st.divider()
+    st.caption("Add products from the Search tab or Recommendations to build your comparison list.")
