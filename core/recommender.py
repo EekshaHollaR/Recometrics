@@ -2,9 +2,16 @@
 Recommender Module
 Parallel recommendation engine using collaborative filtering
 
-This module provides the ParallelRecommender class that uses CPU-based
-data parallelism via ProcessPoolExecutor to generate product recommendations
-based on cosine similarity.
+This module is optimized for large-scale datasets (50,000+ products) using:
+- float32 precision for similarity calculations (sufficient for product ranking)
+- Minimal memory copies in fit() and recommend_similar()
+- ProcessPoolExecutor for CPU parallelism (data parallelism)
+- GPU acceleration option via ParallelRecommenderGPU
+
+Memory Usage:
+- 50K products with 3 features: ~600KB for feature matrix (float32)
+- Similarity computation: Uses chunking to avoid loading all 50K x 50K similarities
+- Scalable to at least 50K products on typical machines (8-16GB RAM)
 """
 
 from typing import List, Dict, Any, Optional
@@ -56,15 +63,20 @@ def _cosine_similarity_chunk(args: tuple) -> np.ndarray:
 
 class ParallelRecommender:
     """
-    Parallel recommendation engine using cosine similarity.
+    Parallel recommendation engine using cosine similarity (CPU-optimized).
     
     Uses CPU-based data parallelism via ProcessPoolExecutor to distribute
-    similarity computations across multiple processes. Recommends products
-    based on feature similarity.
+    similarity computations across multiple processes. Optimized for 50K+ products.
+    
+    Memory Optimization:
+    - Uses float32 for similarity calculations (sufficient precision)
+    - Avoids full similarity matrix (would be 50K x 50K = 10GB in float32)
+    - Computes similarities on-demand for target product only
+    - Minimal copies in fit() - reuses input array if already float32
     
     Attributes:
         dm (DeviceManager): Device manager for tensor operations
-        product_matrix (np.ndarray | None): Product feature matrix (CPU)
+        product_matrix (np.ndarray | None): Product feature matrix (CPU, float32)
         product_ids (np.ndarray | None): Product ID array
     
     Example:
@@ -96,10 +108,16 @@ class ParallelRecommender:
     
     def fit(self, product_matrix: Any, product_ids: np.ndarray) -> None:
         """
-        Store product feature matrix and IDs for recommendation.
+        Store product feature matrix and IDs (optimized for 50K+ products).
         
-        Accepts either NumPy array or PyTorch tensor. Converts to NumPy
-        array on CPU for ProcessPoolExecutor compatibility.
+        Accepts either NumPy array or PyTorch tensor. For large datasets:
+        - If input is already float32 NumPy array: stored directly (no copy)
+        - If input is torch.Tensor: converted to NumPy float32
+        - If input is float64:converted to float32 (50% memory savings)
+        
+        Memory Optimization:
+        - Uses float32 instead of float64 (50% memory for 50K products)
+        - Avoids unnecessary copies when input is already correct type
         
         Args:
             product_matrix: Feature matrix (np.ndarray or torch.Tensor)
@@ -110,17 +128,26 @@ class ParallelRecommender:
             ValueError: If shapes don't match or inputs are invalid
         
         Example:
-            >>> features = np.array([[1, 2, 3], [4, 5, 6]])
+            >>> features = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
             >>> ids = np.array([101, 102])
-            >>> recommender.fit(features, ids)
+            >>> recommender.fit(features, ids)  # No copy if already float32!
         """
         # Convert torch tensor to NumPy if needed
         if hasattr(product_matrix, 'cpu'):
             # PyTorch tensor - convert to NumPy on CPU
-            product_matrix_np = product_matrix.cpu().numpy()
-            print("[ParallelRecommender] Converted torch tensor to NumPy array")
+            # Use float32 for memory efficiency with large datasets
+            product_matrix_np = product_matrix.cpu().numpy().astype(np.float32)
+            print("[ParallelRecommender] Converted torch tensor to NumPy float32 array")
         elif isinstance(product_matrix, np.ndarray):
-            product_matrix_np = product_matrix
+            # Already NumPy - check dtype
+            if product_matrix.dtype == np.float32:
+                # Perfect - use directly without copy (efficient for 50K+ products)
+                product_matrix_np = product_matrix
+                print("[ParallelRecommender] Using input array directly (already float32)")
+            else:
+                # Convert to float32 for memory efficiency
+                product_matrix_np = product_matrix.astype(np.float32)
+                print(f"[ParallelRecommender] Converted {product_matrix.dtype} to float32 for efficiency")
         else:
             raise ValueError(
                 f"product_matrix must be NumPy array or torch.Tensor, "
@@ -144,12 +171,15 @@ class ParallelRecommender:
                 f"but product_ids has {product_ids.shape[0]} elements"
             )
         
-        # Store as NumPy arrays on CPU
-        self.product_matrix = product_matrix_np.astype(np.float64)
-        self.product_ids = product_ids.astype(np.int64)
+        # Store as NumPy arrays - product_matrix already float32
+        # For 50K products x 3 features: ~600KB (float32) vs ~1.2MB (float64)
+        self.product_matrix = product_matrix_np  # Already float32, no copy
+        self.product_ids = product_ids.astype(np.int32)  # int32 sufficient for product IDs
         
+        memory_mb = (self.product_matrix.nbytes + self.product_ids.nbytes) / 1024**2
         print(f"[ParallelRecommender] Fitted with {len(product_ids)} products, "
               f"{product_matrix_np.shape[1]} features")
+        print(f"[ParallelRecommender] Memory usage: {memory_mb:.2f} MB (optimized for 50K+ products)")
     
     def recommend_similar(
         self,

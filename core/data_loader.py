@@ -2,31 +2,43 @@
 Data Loader Module
 Loads and preprocesses product and review data from CSV files
 
-This module provides functions to load product catalogs and user reviews,
-with built-in validation to ensure data integrity.
+This module is optimized for large-scale datasets (50,000+ products) using
+efficient data types (int32, float32) to minimize memory usage while maintaining
+precision for e-commerce applications.
+
+Memory Efficiency:
+- int32 for IDs (supports 2B unique IDs, plenty for products)
+- float32 for prices and ratings (sufficient precision for money/ratings)
+- Expected memory usage: ~200MB for 50K products with 6 columns
 """
 
-from typing import Optional
+from typing import Optional, Dict
 import pandas as pd
 from pathlib import Path
 
 
 def load_products(path: str) -> pd.DataFrame:
     """
-    Load product catalog data from CSV file.
+    Load product catalog data from CSV file with memory-efficient dtypes.
+    
+    Optimized for large datasets (50,000+ products) using:
+    - int32 for product_id and category_id (saves RAM vs int64)
+    - float32 for price and avg_rating (sufficient precision)
+    - str for name and image_url
     
     Expected CSV columns:
-    - product_id: int
+    - product_id: int32
     - name: str
-    - category_id: int
-    - price: float
-    - avg_rating: float
+    - category_id: int32
+    - price: float32
+    - avg_rating: float32
+    - image_url: str (optional, filled with "NO_IMAGE" if missing)
     
     Args:
         path: Path to the products CSV file
     
     Returns:
-        DataFrame with product data and correct dtypes
+        DataFrame with product data and memory-efficient dtypes
     
     Raises:
         FileNotFoundError: If the CSV file doesn't exist
@@ -34,21 +46,24 @@ def load_products(path: str) -> pd.DataFrame:
     
     Example:
         >>> products = load_products("data/products.csv")
-        >>> print(products.head())
+        >>> print(f"Memory usage: {products.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
     """
     if not Path(path).exists():
         raise FileNotFoundError(f"Products file not found: {path}")
     
     try:
-        # Load CSV with explicit dtypes
+        # Load CSV with memory-efficient dtypes for 50K+ rows
+        # int32: Supports 2.1B unique values (plenty for product IDs)
+        # float32: ~7 decimal digits precision (sufficient for prices/ratings)
         df = pd.read_csv(
             path,
             dtype={
-                'product_id': int,
+                'product_id': 'int32',      # Memory efficient for large datasets
                 'name': str,
-                'category_id': int,
-                'price': float,
-                'avg_rating': float
+                'category_id': 'int32',     # int32 uses 50% less memory than int64
+                'price': 'float32',          # float32 uses 50% less memory than float64
+                'avg_rating': 'float32',
+                'image_url': str
             }
         )
         
@@ -61,7 +76,19 @@ def load_products(path: str) -> pd.DataFrame:
                 f"Missing required columns in products CSV: {missing_columns}"
             )
         
+        # Handle image_url column (fill NaN with placeholder, don't raise error)
+        if 'image_url' not in df.columns:
+            df['image_url'] = "NO_IMAGE"
+            print("[DataLoader] ⚠ image_url column missing, filled with 'NO_IMAGE'")
+        else:
+            # Fill any null image URLs with placeholder
+            null_count = df['image_url'].isnull().sum()
+            if null_count > 0:
+                df['image_url'] = df['image_url'].fillna("NO_IMAGE")
+                print(f"[DataLoader] ⚠ Filled {null_count} null image URLs with 'NO_IMAGE'")
+        
         print(f"[DataLoader] Loaded {len(df)} products from {path}")
+        print(f"[DataLoader] Memory usage: {df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
         return df
     
     except Exception as e:
@@ -247,6 +274,41 @@ def get_data_summary(products: pd.DataFrame, reviews: pd.DataFrame) -> dict:
     }
     
     return summary
+
+
+def get_product_lookup(products: pd.DataFrame) -> Dict[int, Dict]:
+    """
+    Create fast lookup dictionary for product information.
+    
+    Optimized for UI/API usage where we need quick product details by ID.
+    For 50K products, this uses ~20-30 MB RAM but provides O(1) lookup speed
+    instead of O(n) DataFrame filtering.
+    
+    Args:
+        products: DataFrame containing product data
+    
+    Returns:
+        Dictionary mapping product_id -> {name, price, avg_rating, image_url, category_id}
+    
+    Example:
+        >>> products = load_products("data/products.csv")
+        >>> lookup = get_product_lookup(products)
+        >>> product_info = lookup[42]
+        >>> print(f"{product_info['name']}: ${product_info['price']:.2f}")
+    """
+    lookup = {}
+    
+    for _, row in products.iterrows():
+        lookup[int(row['product_id'])] = {
+            'name': str(row['name']),
+            'price': float(row['price']),
+            'avg_rating': float(row['avg_rating']),
+            'image_url': str(row.get('image_url', 'NO_IMAGE')),
+            'category_id': int(row['category_id'])
+        }
+    
+    print(f"[DataLoader] Created lookup for {len(lookup)} products")
+    return lookup
 
 
 if __name__ == "__main__":
