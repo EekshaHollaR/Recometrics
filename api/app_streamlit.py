@@ -91,7 +91,7 @@ def get_product_details(products_df: pd.DataFrame, product_id: int) -> dict:
         product_id: Product ID to look up
     
     Returns:
-        Dictionary with product details: product_id, name, price, avg_rating, image_url
+        Dictionary with product details: product_id, name, price, avg_rating, category_id, image_url
     
     Raises:
         KeyError: If product_id not found
@@ -112,6 +112,7 @@ def get_product_details(products_df: pd.DataFrame, product_id: int) -> dict:
         'name': str(row['name']),
         'price': float(row['price']),
         'avg_rating': float(row['avg_rating']),
+        'category_id': int(row['category_id']),
         'image_url': str(row.get('image_url', 'NO_IMAGE'))
     }
 
@@ -268,7 +269,15 @@ tab1, tab2 = st.tabs(["🎯 Recommendations", "⚖️ Product Comparison"])
 # ========== Tab 1: Recommendations ==========
 with tab1:
     st.header("Product Recommendations")
-    st.markdown("Search for a product and get similar recommendations")
+    st.markdown("Search for a product, view details, and get personalized recommendations")
+    
+    # Initialize session state for recommendations  
+    if 'recommendations' not in st.session_state:
+        st.session_state.recommendations = None
+    if 'rec_limit' not in st.session_state:
+        st.session_state.rec_limit = 6
+    if 'selected_product_id' not in st.session_state:
+        st.session_state.selected_product_id = None
     
     # Search interface
     search_query = st.text_input(
@@ -279,142 +288,177 @@ with tab1:
     selected_product_id = None
     
     if search_query:
-        # Search products
-        search_results = search_products(products, search_query, max_results=20)
+        # Search products (up to 30 results)
+        search_results = search_products(products, search_query, max_results=30)
         
         if not search_results.empty:
-            st.success(f"Found {len(search_results)} matching products")
+            st.success(f"Found {len(search_results)} matching products (showing top 30)")
             
-            # Display search results in a table
-            display_results = search_results[['product_id', 'name', 'price', 'avg_rating']].copy()
-            display_results['price'] = display_results['price'].apply(lambda x: f"${x:.2f}")
-            display_results['avg_rating'] = display_results['avg_rating'].apply(lambda x: f"{x:.1f}⭐")
-            
-            st.dataframe(
-                display_results,
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            # Product selection from search results
+            # Product selection from search results with radio buttons
             product_options = [
                 f"{row['product_id']} – {row['name']}"
                 for _, row in search_results.iterrows()
             ]
             
-            selected_option = st.selectbox(
-                "Select a product for recommendations:",
+            selected_option = st.radio(
+                "Select a product:",
                 options=product_options,
-                index=0
+                index=0,
+                key="product_selector"
             )
             
             # Extract product ID from selection
             selected_product_id = int(selected_option.split(" – ")[0])
+            
+            # If product changed, reset recommendations
+            if selected_product_id != st.session_state.selected_product_id:
+                st.session_state.selected_product_id = selected_product_id
+                st.session_state.recommendations = None
+                st.session_state.rec_limit = 6
             
         else:
             st.warning("❌ No products found. Try a different search term.")
     else:
         st.info("👆 Start typing to search for products")
     
-    # Recommendation settings
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        top_k = st.slider(
-            "Number of recommendations:",
-            min_value=1,
-            max_value=min(20, len(products) - 1),
-            value=5
-        )
-    
-    with col2:
-        if dm.use_gpu:
-            mode = st.radio(
-                "Computation mode:",
-                ["CPU Parallel (4 workers)", "GPU Accelerated"],
-                index=1
-            )
-        else:
-            mode = st.radio(
-                "Computation mode:",
-                ["CPU Parallel (4 workers)"],
-                index=0
-            )
-    
-    # Get recommendations button
-    if st.button(
-        "🚀 Get Recommendations",
-        type="primary",
-        disabled=(selected_product_id is None)
-    ):
-        target_index = products[products['product_id'] == selected_product_id].index[0]
+    # ========== Product Details Section ==========
+    if selected_product_id:
+        st.divider()
+        st.subheader("📦 Product Details")
+        
+        # Get product details
         target_product = get_product_details(products, selected_product_id)
         
-        # Display selected product with image
-        st.subheader("Selected Product")
-        col_img, col_info = st.columns([1, 3])
+        # Layout: Image left, Details right
+        col_img, col_details = st.columns([1, 2])
         
         with col_img:
-            display_product_image(target_product['image_url'], width=120)
+            display_product_image(target_product['image_url'], width=200)
         
-        with col_info:
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Product ID", target_product['product_id'])
-            col2.metric("Price", f"${target_product['price']:.2f}")
-            col3.metric("Rating", f"{target_product['avg_rating']:.2f}⭐")
-            col4.metric("Name", target_product['name'], label_visibility="hidden")
+        with col_details:
+            st.markdown(f"### {target_product['name']}")
+            
+            # Product metrics
+            metric_col1, metric_col2, metric_col3 = st.columns(3)
+            metric_col1.metric("Price", f"${target_product['price']:.2f}")
+            metric_col2.metric("Avg Rating", f"{target_product['avg_rating']:.1f}⭐")
+            metric_col3.metric("Category ID", target_product['category_id'])
+            
+            # Auto-generate description if missing
+            category_names = {
+                1: "Electronics", 2: "Accessories", 3: "Computing", 
+                4: "Audio", 5: "Peripherals", 6: "Cables & Adapters"
+            }
+            category_id = target_product['category_id']
+            category_name = category_names.get(category_id, "Products")
+            
+            # Description (auto-generated)
+            st.markdown("**Description:**")
+            description = (
+                f"This {target_product['name']} is a high-quality product in our {category_name} category. "
+                f"Priced at ${target_product['price']:.2f}, it has earned an average rating of "
+                f"{target_product['avg_rating']:.1f} stars from our customers. "
+                f"Perfect for anyone looking for reliable {category_name.lower()}."
+            )
+            st.write(description)
         
+        # ========== Reviews Section ==========
+        st.markdown("---")
+        st.markdown("### 📝 Recent Reviews")
+        
+        # Filter reviews for this product
+        product_reviews = reviews[reviews['product_id'] == selected_product_id].head(20)
+        
+        if not product_reviews.empty:
+            # Display reviews in a clean format
+            for idx, review_row in product_reviews.iterrows():
+                review_col1, review_col2 = st.columns([1, 5])
+                
+                with review_col1:
+                    st.metric("Rating", f"{review_row['rating']:.1f}⭐", label_visibility="collapsed")
+                
+                with review_col2:
+                    st.markdown(f"*{review_row['review_text']}*")
+                
+                if idx < product_reviews.index[-1]:
+                    st.markdown("---")
+        else:
+            st.info("📭 No reviews available for this product yet.")
+        
+        # ========== Auto-Generated Recommendations ==========
         st.divider()
+        st.subheader("🎯 Recommended Products")
         
-        # Generate recommendations
-        with st.spinner("Computing similarities..."):
-            if mode == "GPU Accelerated" and recommender_gpu:
-                recs, elapsed = time_function(
-                    recommender_gpu.recommend_similar_gpu,
-                    target_index,
-                    top_k=top_k
-                )
-                mode_label = "GPU"
-            else:
-                recs, elapsed = time_function(
-                    recommender_cpu.recommend_similar,
-                    target_index,
-                    top_k=top_k,
-                    n_workers=4
-                )
-                mode_label = "CPU (4 workers)"
-        
-        st.success(f"✓ Found {len(recs)} recommendations in {format_time(elapsed)} using {mode_label}")
-        
-        # Display recommendations with images
-        st.subheader("Top Recommendations")
-        
-        for i, rec in enumerate(recs, 1):
-            prod_details = get_product_details(products, rec['product_id'])
+        # Auto-compute recommendations if not already done
+        if st.session_state.recommendations is None:
+            target_index = products[products['product_id'] == selected_product_id].index[0]
             
-            # Create columns for each recommendation
-            col_img, col_info = st.columns([1, 4])
-            
-            with col_img:
-                display_product_image(prod_details['image_url'], width=100)
-            
-            with col_info:
-                st.markdown(f"**#{i}. {prod_details['name']}**")
-                st.markdown(
-                    f"💰 ${prod_details['price']:.2f} | "
-                    f"⭐ {prod_details['avg_rating']:.2f} | "
-                    f"🔗 Similarity: {rec['score']:.4f}"
-                )
-            
-            if i < len(recs):
-                st.divider()
+            with st.spinner("Computing personalized recommendations..."):
+                # Always compute top 20 recommendations
+                if dm.use_gpu and recommender_gpu:
+                    recs, elapsed = time_function(
+                        recommender_gpu.recommend_similar_gpu,
+                        target_index,
+                        top_k=20
+                    )
+                    mode_label = "GPU"
+                else:
+                    recs, elapsed = time_function(
+                        recommender_cpu.recommend_similar,
+                        target_index,
+                        top_k=20,
+                        n_workers=4
+                    )
+                    mode_label = "CPU (4 workers)"
+                
+                st.session_state.recommendations = recs
+                st.session_state.computation_time = elapsed
+                st.session_state.computation_mode = mode_label
         
-        # Performance metrics
-        with st.expander("📊 Performance Metrics"):
-            perf_col1, perf_col2, perf_col3 = st.columns(3)
-            perf_col1.metric("Computation Time", format_time(elapsed))
-            perf_col2.metric("Mode", mode_label)
-            perf_col3.metric("Products Analyzed", len(products))
+        # Display recommendations (progressive reveal)
+        if st.session_state.recommendations:
+            recs = st.session_state.recommendations
+            rec_limit = st.session_state.rec_limit
+            
+            st.info(f"✨ Showing {min(rec_limit, len(recs))} of {len(recs)} recommendations "
+                   f"(computed in {format_time(st.session_state.computation_time)} "
+                   f"using {st.session_state.computation_mode})")
+            
+            # Display recommendations up to rec_limit
+            for i, rec in enumerate(recs[:rec_limit], 1):
+                prod_details = get_product_details(products, rec['product_id'])
+                
+                # Card-like layout with columns
+                card_col1, card_col2 = st.columns([1, 3])
+                
+                with card_col1:
+                    display_product_image(prod_details['image_url'], width=120)
+                
+                with card_col2:
+                    st.markdown(f"#### {i}. {prod_details['name']}")
+                    
+                    detail_col1, detail_col2, detail_col3 = st.columns(3)
+                    detail_col1.metric("Price", f"${prod_details['price']:.2f}")
+                    detail_col2.metric("Rating", f"{prod_details['avg_rating']:.1f}⭐")
+                    detail_col3.metric("Similarity", f"{rec['score']:.4f}")
+                
+                if i < min(rec_limit, len(recs)):
+                    st.markdown("---")
+            
+            # "Load More" button
+            if rec_limit < len(recs):
+                if st.button("📥 Load More Recommendations", type="secondary"):
+                    st.session_state.rec_limit = min(rec_limit + 6, 20)
+                    st.rerun()
+            elif rec_limit < 20 and len(recs) == rec_limit:
+                st.caption("✓ All recommendations loaded")
+            
+            # Performance metrics
+            with st.expander("📊 Performance Metrics"):
+                perf_col1, perf_col2, perf_col3 = st.columns(3)
+                perf_col1.metric("Computation Time", format_time(st.session_state.computation_time))
+                perf_col2.metric("Mode", st.session_state.computation_mode)
+                perf_col3.metric("Products Analyzed", len(products))
 
 
 # ========== Tab 2: Comparison ==========
