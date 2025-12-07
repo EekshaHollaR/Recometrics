@@ -28,6 +28,7 @@ from core.metrics import time_function, format_time
 
 
 # ========== Page Configuration ==========
+
 st.set_page_config(
     page_title="PaReCo-Py",
     page_icon="🛍️",
@@ -37,6 +38,7 @@ st.set_page_config(
 
 
 # ========== Utility Functions ==========
+
 def search_products(
     products_df: pd.DataFrame,
     query: str,
@@ -44,19 +46,19 @@ def search_products(
 ) -> pd.DataFrame:
     """
     Search products by name (optimized for 50K+ rows).
-    
+
     Uses vectorized string operations. Case-insensitive search on name.
     Returns up to max_results matches.
     """
     if not query or query.strip() == "":
         return pd.DataFrame()
-    
+
     query = query.strip()
-    
+
     # Vectorized case-insensitive search on name only
     mask = products_df['name'].str.contains(query, case=False, na=False)
     filtered = products_df[mask].head(max_results).copy()
-    
+
     return filtered
 
 
@@ -65,12 +67,12 @@ def get_product_details(products_df: pd.DataFrame, product_id: int) -> dict:
     Get detailed information for a specific product.
     """
     product_row = products_df[products_df['product_id'] == product_id]
-    
+
     if product_row.empty:
         raise KeyError(f"Product ID {product_id} not found")
-    
+
     row = product_row.iloc[0]
-    
+
     return {
         'product_id': int(row['product_id']),
         'name': str(row['name']),
@@ -95,6 +97,7 @@ def display_product_image(image_url: str, width: int = 150):
 
 
 # ========== Initialize Components (Cached) ==========
+
 @st.cache_data
 def get_data():
     """Load product and review data (cached)."""
@@ -109,24 +112,24 @@ def get_data():
 def get_models(products_df: pd.DataFrame, reviews_df: pd.DataFrame):
     """Initialize recommenders and comparator (cached)."""
     dm = DeviceManager()
-    
+
     # Build features
     fb = FeatureBuilder(dm)
     features = fb.build_product_matrix(products_df)
     product_ids = fb.get_product_ids(products_df)
-    
+
     # Create recommenders
     recommender_cpu = ParallelRecommender(dm)
     recommender_cpu.fit(features, product_ids)
-    
+
     recommender_gpu = None
     if dm.use_gpu:
         recommender_gpu = ParallelRecommenderGPU(dm)
         recommender_gpu.fit(features, product_ids)
-    
-    # Create comparator
+
+    # Create comparator (currently used for future extension)
     comparator = ParallelComparator(products_df, reviews_df)
-    
+
     return {
         'dm': dm,
         'product_ids': product_ids,
@@ -147,26 +150,28 @@ comparator = models['comparator']
 
 
 # ========== Sidebar ==========
+
 with st.sidebar:
-    st.title("🛍️ PaReCo-Py")
+    st.title("PaReCo-Py")
     st.markdown("**Parallel Recommendation & Comparison Engine**")
     st.caption("Optimized for 50,000+ products")
     st.divider()
-    
+
     # Device info
     if dm.use_gpu:
         st.success(f"**Device:** GPU ({dm.device})")
     else:
         st.info(f"**Device:** CPU only")
-    
+
     st.divider()
-    st.subheader("📊 Dataset")
+    st.subheader("Dataset")
     st.metric("Products", len(products))
     st.metric("Reviews", len(reviews))
 
 
 # ========== Main Content ==========
-st.title("🛍️ PaReCo-Py Dashboard")
+
+st.title("PaReCo-Py Dashboard")
 
 # Initialize Session State (Global)
 if 'selected_product_id' not in st.session_state:
@@ -183,9 +188,12 @@ if 'compare_products' not in st.session_state:
     st.session_state.compare_products = []
 if 'recommendations' not in st.session_state:
     st.session_state.recommendations = None
+if 'comp_time' not in st.session_state:
+    st.session_state.comp_time = 0.0  # comparison timing
 
 
 # --- Helpers ---
+
 def add_to_compare(product_id: int):
     """Add product to comparison list."""
     if product_id not in st.session_state.compare_products:
@@ -193,6 +201,7 @@ def add_to_compare(product_id: int):
         st.toast(f"Added product {product_id} to comparison", icon="✅")
     else:
         st.toast("Product already in comparison list", icon="ℹ️")
+
 
 def remove_from_compare(product_id: int):
     """Remove product from comparison list."""
@@ -203,31 +212,32 @@ def remove_from_compare(product_id: int):
 
 
 # Create tabs
-tab1, tab2 = st.tabs(["🎯 Recommendations", "⚖️ Product Comparison"])
+tab1, tab2 = st.tabs(["Recommendations", "Product Comparison"])
 
 
 # ========== Tab 1: Recommendations ==========
+
 with tab1:
     # --- View 1: Search & Grid ---
     if st.session_state.selected_product_id is None:
         st.header("Search Products")
-        
+
         search_query = st.text_input(
             "🔍 Search for a product:",
             placeholder="e.g., television, smartphone, headphones...",
             key="main_search"
         )
-        
+
         if search_query:
             results = search_products(products, search_query)
-            
+
             if not results.empty:
                 st.success(f"Found {len(results)} matching products")
-                
+
                 # Grid Layout for Results
                 cols_per_row = 3
                 rows = [results.iloc[i:i + cols_per_row] for i in range(0, len(results), cols_per_row)]
-                
+
                 for row in rows:
                     cols = st.columns(cols_per_row)
                     for idx, (_, product) in enumerate(row.iterrows()):
@@ -236,17 +246,22 @@ with tab1:
                             with st.container(border=True):
                                 display_product_image(product.get("image_url"), width=150)
                                 st.markdown(f"**{product['name']}**")
-                                st.caption(f"{product['avg_rating']} ⭐ | ₹{product['price']:,.2f}")
-                                
+                                st.caption(f"{product['avg_rating']:,.2f} ⭐ | ₹{product['price']:,.2f}")
+
                                 c1, c2 = st.columns(2)
                                 if c1.button("View Details", key=f"view_{pid}"):
                                     st.session_state.selected_product_id = pid
                                     st.session_state.rec_limit = 6
-                                    st.session_state.current_recs = [] 
+                                    st.session_state.current_recs = []
                                     st.rerun()
-                                
-                                if c2.button("Add Compare", key=f"comp_{pid}"):
-                                    add_to_compare(pid)
+
+                                # TOGGLE: Add / Remove Compare in search grid
+                                if pid in st.session_state.compare_products:
+                                    if c2.button("Remove", key=f"rem_comp_{pid}"):
+                                        remove_from_compare(pid)
+                                else:
+                                    if c2.button("Add Compare", key=f"comp_{pid}"):
+                                        add_to_compare(pid)
             else:
                 st.warning("No products found matching your query.")
         else:
@@ -255,44 +270,49 @@ with tab1:
     # --- View 2: Product Details & Recommendations ---
     else:
         pid = st.session_state.selected_product_id
-        
+
         # Navigation
         c1, c2 = st.columns([1, 5])
         if c1.button("🔙 Back to Search"):
             st.session_state.selected_product_id = None
             st.rerun()
-            
+
         try:
             details = get_product_details(products, pid)
-            
+
             # --- Product Header ---
             st.divider()
             col_img, col_info = st.columns([1, 2])
-            
+
             with col_img:
                 display_product_image(details['image_url'], width=300)
-            
+
             with col_info:
                 st.title(details['name'])
                 st.markdown(f"**Brand:** {details['brand']} | **Category:** {details['category_name']}")
                 st.subheader(f"₹{details['price']:,.2f}")
-                st.markdown(f"**Rating:** {details['avg_rating']} ⭐")
-                
-                if st.button("Add to Compare", key=f"btn_add_compare_{pid}"):
-                    add_to_compare(pid)
-                
+                st.markdown(f"**Rating:** {details['avg_rating']:,.2f} ⭐")
+
+                # TOGGLE: Add / Remove from Compare on product details
+                if pid in st.session_state.compare_products:
+                    if st.button("Remove from Compare", key=f"btn_remove_compare_{pid}"):
+                        remove_from_compare(pid)
+                else:
+                    if st.button("Add to Compare", key=f"btn_add_compare_{pid}"):
+                        add_to_compare(pid)
+
                 # Auto-generated description
                 desc = (
                     f"Experience the new {details['name']} by {details['brand']}. "
-                    f"Top-rated in {details['category_name']} with a {details['avg_rating']} star rating. "
+                    f"Top-rated in {details['category_name']} with a {details['avg_rating']:.2f} star rating. "
                     "Available now at the best price."
                 )
                 st.info(desc)
-            
+
             # --- Reviews ---
-            st.markdown("### 📝 Recent Reviews")
+            st.markdown("### Recent Reviews")
             prod_reviews = reviews[reviews['product_id'] == pid].head(20)
-            
+
             if not prod_reviews.empty:
                 with st.expander(f"View {len(prod_reviews)} Reviews", expanded=False):
                     for _, r in prod_reviews.iterrows():
@@ -300,62 +320,70 @@ with tab1:
                         st.divider()
             else:
                 st.caption("No reviews available for this product yet.")
-            
+
             # --- Recommendations Logic ---
             if not st.session_state.current_recs:
                 with st.spinner("Computing recommendations..."):
                     target_idx = products[products['product_id'] == pid].index[0]
-                    
+
                     if dm.use_gpu and recommender_gpu:
-                         recs, elapsed = time_function(
+                        recs, elapsed = time_function(
                             recommender_gpu.recommend_similar_gpu,
                             target_idx, top_k=20
                         )
-                         mode = "GPU"
+                        mode = "GPU"
                     else:
                         recs, elapsed = time_function(
                             recommender_cpu.recommend_similar,
                             target_idx, top_k=20, n_workers=4
                         )
                         mode = "CPU"
-                    
+
                     st.session_state.current_recs = recs
                     st.session_state.rec_time = elapsed
                     st.session_state.rec_mode = mode
-            
+
             # --- Display Recommendations ---
             st.divider()
-            st.subheader("🎯 Recommended Products")
-            st.caption(f"Computed in {format_time(st.session_state.rec_time)} using {st.session_state.rec_mode}")
-            
+            st.subheader("Recommended Products")
+            st.caption(
+                f"Computed in {format_time(st.session_state.rec_time)} "
+                f"using {st.session_state.rec_mode}"
+            )
+
             current_recs = st.session_state.current_recs
             limit = st.session_state.rec_limit
             visible_recs = current_recs[:limit]
-            
+
             # Grid display for recs
             r_rows = [visible_recs[i:i + 3] for i in range(0, len(visible_recs), 3)]
-            
+
             for row in r_rows:
                 r_cols = st.columns(3)
                 for idx, r_item in enumerate(row):
                     r_pid = int(r_item['product_id'])
                     r_detail = get_product_details(products, r_pid)
                     with r_cols[idx]:
-                         with st.container(border=True):
+                        with st.container(border=True):
                             display_product_image(r_detail['image_url'], width=100)
                             st.markdown(f"**{r_detail['name']}**")
-                            st.caption(f"₹{r_detail['price']:,.2f} | {r_detail['avg_rating']}⭐")
+                            st.caption(f"₹{r_detail['price']:,.2f} | {r_detail['avg_rating']:,.2f}⭐")
                             st.caption(f"Similarity: {r_item['score']:.4f}")
-                            
+
                             b1, b2 = st.columns(2)
                             if b1.button("View", key=f"rec_view_{r_pid}"):
                                 st.session_state.selected_product_id = r_pid
                                 st.session_state.rec_limit = 6
                                 st.session_state.current_recs = []
                                 st.rerun()
-                            
-                            if b2.button("Compare", key=f"rec_comp_{r_pid}"):
-                                add_to_compare(r_pid)
+
+                            # TOGGLE: Add / Remove Compare in recommendations grid
+                            if r_pid in st.session_state.compare_products:
+                                if b2.button("Remove", key=f"rec_rem_{r_pid}"):
+                                    remove_from_compare(r_pid)
+                            else:
+                                if b2.button("Add Compare", key=f"rec_comp_{r_pid}"):
+                                    add_to_compare(r_pid)
 
             # --- "Recommend More" Button ---
             if limit < 20 and limit < len(current_recs):
@@ -370,38 +398,39 @@ with tab1:
 
 
 # ========== Tab 2: Comparison ==========
+
 with tab2:
-    st.header("⚖️ Product Comparison")
-    
+    st.header("Product Comparison")
+
     compare_ids = st.session_state.compare_products
-    
+
     # 1. Selected Products
     if compare_ids:
         st.subheader(f"Selected ({len(compare_ids)})")
         # Grid layout for selected products removal
         sel_rows = [compare_ids[i:i + 4] for i in range(0, len(compare_ids), 4)]
-        
+
         for r_ids in sel_rows:
-             r_cols = st.columns(4)
-             for idx, pid in enumerate(r_ids):
+            r_cols = st.columns(4)
+            for idx, pid in enumerate(r_ids):
                 with r_cols[idx]:
                     try:
                         p_info = get_product_details(products, pid)
                         with st.container(border=True):
                             st.caption(f"**{p_info['name']}**")
-                            # display_product_image(p_info['image_url'], width=80) 
+                            # display_product_image(p_info['image_url'], width=80)
                             if st.button("❌ Remove", key=f"rem_{pid}"):
                                 remove_from_compare(pid)
                     except KeyError:
                         st.error(f"ID {pid} not found")
         st.divider()
     else:
-        st.info("No products selected. Add products from the Search tab search below.")
+        st.info("No products selected. Add products from the Search tab or below.")
 
     # 2. Add More Products
     st.subheader("Add Products to Compare")
     comp_search = st.text_input("Search (e.g. monitor, laptop) to add:", key="comp_search_bar")
-    
+
     if comp_search:
         results = search_products(products, comp_search, max_results=12)
         if not results.empty:
@@ -414,9 +443,11 @@ with tab2:
                         with st.container(border=True):
                             st.caption(f"**{p['name']}**")
                             st.caption(f"₹{p['price']:,.0f}")
-                            
+
+                            # TOGGLE: Add / Remove in comparison search
                             if pid in compare_ids:
-                                st.button("✓ Added", disabled=True, key=f"added_{pid}")
+                                if st.button("Remove", key=f"rem_comp_search_{pid}"):
+                                    remove_from_compare(pid)
                             else:
                                 if st.button("Add", key=f"add_comp_search_{pid}"):
                                     add_to_compare(pid)
@@ -424,38 +455,48 @@ with tab2:
 
     # 3. Compare Action
     st.divider()
-    
+
     if len(compare_ids) >= 2:
-        if st.button("🚀 Compare Now", type="primary"):
+
+        if st.button("Compare Now", type="primary"):
+            # Wrap comparison logic in a function so we can time it
+            def compute_comparison():
+                comp_data = []
+                for pid in compare_ids:
+                    d = get_product_details(products, pid)
+                    comp_data.append(d)
+
+                df_comp_local = pd.DataFrame(comp_data)
+
+                # Metric Calculation
+                # Weighted Score: Rating (normalized) * 0.7 + (1/Price normalized) * 0.3 approx
+                # Simple heuristic: Rating * 2000 - Price
+                df_comp_local['score'] = (df_comp_local['avg_rating'] * 2000) - df_comp_local['price']
+
+                best_overall_local = df_comp_local.loc[df_comp_local['score'].idxmax()]
+                best_perf_local = df_comp_local.loc[df_comp_local['avg_rating'].idxmax()]
+
+                # Budget: min price among those with rating >= 4.0, else min price
+                budg_cand = df_comp_local[df_comp_local['avg_rating'] >= 4.0]
+                if budg_cand.empty:
+                    budg_cand = df_comp_local
+                best_budget_local = budg_cand.loc[budg_cand['price'].idxmin()]
+
+                return df_comp_local, best_overall_local, best_budget_local, best_perf_local
+
+            # Time the comparison computation
+            (df_comp, best_overall, best_budget, best_perf), comp_elapsed = time_function(compute_comparison)
+            st.session_state.comp_time = comp_elapsed
+
             st.subheader("Comparison Results")
-            
-            comp_data = []
-            for pid in compare_ids:
-                d = get_product_details(products, pid)
-                comp_data.append(d)
-                
-            df_comp = pd.DataFrame(comp_data)
-            
-            # Metric Calculation
-            # Weighted Score: Rating (normalized) * 0.7 + (1/Price normalized) * 0.3 approx
-            # Simple heuristic: Rating * 10 - Price/1000
-            df_comp['score'] = (df_comp['avg_rating'] * 2000) - df_comp['price']
-            
-            best_overall = df_comp.loc[df_comp['score'].idxmax()]
-            best_perf = df_comp.loc[df_comp['avg_rating'].idxmax()]
-            
-            # Budget: min price among those with rating >= 4.0, else min price
-            budg_cand = df_comp[df_comp['avg_rating'] >= 4.0]
-            if budg_cand.empty:
-                 budg_cand = df_comp
-            best_budget = budg_cand.loc[budg_cand['price'].idxmin()]
+            st.caption(f"Computed in {format_time(st.session_state.comp_time)}")
 
             # Badges
             c1, c2, c3 = st.columns(3)
-            c1.success(f"🏆 Best Overall: **{best_overall['name']}**")
-            c2.info(f"💰 Best Budget: **{best_budget['name']}**")
-            c3.warning(f"⭐ Best Performance: **{best_perf['name']}**")
-            
+            c1.success(f"Best Overall: **{best_overall['name']}**")
+            c2.info(f"Best Budget: **{best_budget['name']}**")
+            c3.warning(f"Best Performance: **{best_perf['name']}**")
+
             # Table
             st.dataframe(
                 df_comp[['name', 'brand', 'price', 'avg_rating', 'category_name']].style.format({
@@ -464,12 +505,10 @@ with tab2:
                 }),
                 use_container_width=True
             )
-            
-            # Workers slider hidden/fixed for simplicity or shown if needed
-            
+
     elif len(compare_ids) == 1:
         st.warning("Select at least one more product to compare.")
-    
+
     # 4. Footer
     st.divider()
     st.caption("Add products from the Search tab or Recommendations to build your comparison list.")
